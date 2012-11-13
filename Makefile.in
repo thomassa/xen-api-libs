@@ -5,24 +5,33 @@ HAVE_LINUX_CDROM = @LINUX_CDROM@
 HAVE_XMLM = @OCAML_PKG_xmlm@
 HAVE_TYPECONV = @OCAML_PKG_type_conv@
 
+include config.mk
+
+.PHONY: default
+default: all 
+	@:
+
 .PHONY: all
 all:
-	$(MAKE) -C uuid
 ifeq ($(HAVE_TYPECONV),type-conv)
 	$(MAKE) -C rpc-light
 endif
+	$(MAKE) -C uuid
 	$(MAKE) -C stdext
 	$(MAKE) -C log
+	$(MAKE) -C xenctrlext
+	$(MAKE) -C xenstoreext
 	$(MAKE) -C stunnel
 	$(MAKE) -C pciutil
-	$(MAKE) -C http-svr
 	$(MAKE) -C close-and-exec
 	$(MAKE) -C sexpr
+	$(MAKE) -C udev
 
 ifeq ($(HAVE_XMLM),xmlm)
 	$(MAKE) -C xml-light2
 	$(MAKE) -C rss
 endif
+	$(MAKE) -C http-svr
 ifeq ($(HAVE_LINUX_CDROM),1)
 	$(MAKE) -C cdrom
 endif
@@ -32,31 +41,38 @@ ifeq ($(HAVE_DEVICE_MAPPER),1)
 endif
 	$(MAKE) -C forking_executioner
 	$(MAKE) -C xen-utils
+	$(MAKE) -C nbd
+	CFLAGS="-fPIC -I/usr/lib/ocaml" $(MAKE) -C oclock
 
-.PHONY: allxen
-allxen:
 ifeq ($(HAVE_XEN),1)
-	$(MAKE) -C mmap
 	$(MAKE) -C netdev
-	$(MAKE) -C xc
-	$(MAKE) -C xb
-	$(MAKE) -C xs
-	$(MAKE) -C xsrpc
-	$(MAKE) -C eventchn
 	$(MAKE) -C cpuid
 	$(MAKE) -C vhd
 	$(MAKE) -C tapctl
 endif
+	$(MAKE) -C pciutil bins
+	$(MAKE) -C xml-light2 bins
+	$(MAKE) -C sexpr bins
+	$(MAKE) -C stdext bins
+	$(MAKE) -C close-and-exec bins
 
-install:
+STUBLIBDIR = $(OCAMLDESTDIR)/stublibs
+$(STUBLIBDIR):
+	mkdir -p $@
+
+
+install: $(STUBLIBDIR) 
 	$(MAKE) -C uuid install
 	$(MAKE) -C stdext install
+	$(MAKE) -C xenctrlext install
+	$(MAKE) -C xenstoreext install
 	$(MAKE) -C log install
 	$(MAKE) -C stunnel install
 	$(MAKE) -C pciutil install
 	$(MAKE) -C http-svr install
 	$(MAKE) -C close-and-exec install
 	$(MAKE) -C sexpr install
+	$(MAKE) -C udev install
 ifeq ($(HAVE_TYPECONV),type-conv)
 	$(MAKE) -C rpc-light install
 endif
@@ -73,30 +89,35 @@ ifeq ($(HAVE_DEVICE_MAPPER),1)
 endif
 	$(MAKE) -C forking_executioner install
 	$(MAKE) -C xen-utils install
+	$(MAKE) -C nbd install
+	$(MAKE) -C oclock install
 
-installxen:
 ifeq ($(HAVE_XEN),1)
-	$(MAKE) -C mmap install
 	$(MAKE) -C netdev install
-	$(MAKE) -C xc install
-	$(MAKE) -C xb install
-	$(MAKE) -C xs install
-	$(MAKE) -C xsrpc install
-	$(MAKE) -C eventchn install
 	$(MAKE) -C cpuid install
 	$(MAKE) -C vhd install
 	$(MAKE) -C tapctl install
 endif
+	$(MAKE) -C pciutil bininstall
+	$(MAKE) -C xml-light2 bininstall
+	$(MAKE) -C sexpr bininstall
+	$(MAKE) -C stdext bininstall
+	$(MAKE) -C close-and-exec bininstall
+	$(MAKE) -C forking_executioner bininstall
+
 
 uninstall:
 	$(MAKE) -C uuid uninstall
 	$(MAKE) -C stdext uninstall
+	$(MAKE) -C xenctrlext uninstall
+	$(MAKE) -C xenstoreext uninstall
 	$(MAKE) -C log uninstall
 	$(MAKE) -C stunnel uninstall
 	$(MAKE) -C pciutil uninstall
 	$(MAKE) -C http-svr uninstall
 	$(MAKE) -C close-and-exec uninstall
 	$(MAKE) -C sexpr uninstall
+	$(MAKE) -C udev uninstall
 ifeq ($(HAVE_TYPECONV),type-conv)
 	$(MAKE) -C rpc-light uninstall
 endif
@@ -113,37 +134,16 @@ ifeq ($(HAVE_DEVICE_MAPPER),1)
 endif
 	$(MAKE) -C forking_executioner uninstall
 	$(MAKE) -C xen-utils uninstall
+	$(MAKE) -C nbd uninstall
+	$(MAKE) -C oclock uninstall
 
-uninstallxen:
 ifeq ($(HAVE_XEN),1)
-	$(MAKE) -C eventchn uninstall
-	$(MAKE) -C xsrpc uninstall
 	$(MAKE) -C netdev uninstall
-	$(MAKE) -C xs uninstall
-	$(MAKE) -C xb uninstall
-	$(MAKE) -C xc uninstall
-	$(MAKE) -C mmap uninstall
 	$(MAKE) -C cpuid uninstall
 	$(MAKE) -C vhd uninstall
 	$(MAKE) -C tapctl uninstall
 endif
 
-bins:
-	$(MAKE) -C pciutil bins
-	$(MAKE) -C xml-light2 bins
-	$(MAKE) -C sexpr bins
-	$(MAKE) -C stdext bins
-	$(MAKE) -C close-and-exec bins
-
-bininstall:
-	$(MAKE) -C pciutil bininstall
-	$(MAKE) -C xml-light2 bininstall
-	$(MAKE) -C sexpr bininstall
-	$(MAKE) -C stdext bininstall
-	$(MAKE) -C close-and-exec bininstall
-	$(MAKE) -C forking_executioner bininstall
-
-binuninstall:
 	$(MAKE) -C pciutil binuninstall
 	$(MAKE) -C xml-light2 binuninstall
 	$(MAKE) -C sexpr binuninstall
@@ -155,22 +155,19 @@ binuninstall:
 doc:
 	$(MAKE) -C uuid doc
 	$(MAKE) -C stdext doc
+	$(MAKE) -C xenctrlext doc
+	$(MAKE) -C xenstoreext doc
 	$(MAKE) -C sexpr doc
+	$(MAKE) -C udev doc
 	$(MAKE) -C log doc
-	$(MAKE) -C xb doc
-	$(MAKE) -C xc doc
-	$(MAKE) -C xs doc
 	$(MAKE) -C xml-light2 doc
 	$(MAKE) -C rpc-light doc
 	$(MAKE) -C http-svr doc
 	$(MAKE) -C camldm doc
 	$(MAKE) -C cdrom doc
-	$(MAKE) -C eventchn doc
 	$(MAKE) -C pciutil doc
 	$(MAKE) -C rss doc
 	$(MAKE) -C stunnel doc
-	$(MAKE) -C xsrpc doc
-	$(MAKE) -C mmap doc
 	$(MAKE) -C netdev doc
 	$(MAKE) -C forking_executioner doc
 	$(MAKE) -C mlvm doc
@@ -178,12 +175,21 @@ doc:
 	$(MAKE) -C vhd doc
 	$(MAKE) -C tapctl doc
 	$(MAKE) -C xen-utils doc
+	$(MAKE) -C nbd doc
+	$(MAKE) -C oclock doc
+
+
+.PHONY: test
+test:
+	$(MAKE) -C http-svr test
 
 .PHONY: clean
 clean:
 	$(MAKE) -C uuid clean
 	$(MAKE) -C camldm clean
 	$(MAKE) -C stdext clean
+	$(MAKE) -C xenctrlext clean
+	$(MAKE) -C xenstoreext clean
 	$(MAKE) -C log clean
 	$(MAKE) -C stunnel clean
 	$(MAKE) -C pciutil clean
@@ -194,26 +200,21 @@ clean:
 	$(MAKE) -C http-svr clean
 	$(MAKE) -C close-and-exec clean
 	$(MAKE) -C sexpr clean
+	$(MAKE) -C udev clean
 	$(MAKE) -C doc clean
 	$(MAKE) -C forking_executioner clean
 	$(MAKE) -C mlvm clean
+	$(MAKE) -C xen-utils clean
+	$(MAKE) -C nbd clean
+	$(MAKE) -C oclock clean
+	$(MAKE) -C netdev clean
 	$(MAKE) -C cpuid clean
 	$(MAKE) -C vhd clean
 	$(MAKE) -C tapctl clean
-	$(MAKE) -C xen-utils clean
 
-cleanxen:
-	$(MAKE) -C mmap clean
-	$(MAKE) -C netdev clean
-	$(MAKE) -C xc clean
-	$(MAKE) -C xb clean
-	$(MAKE) -C xs clean
-	$(MAKE) -C xsrpc clean
-	$(MAKE) -C eventchn clean
-
-RPM_SPECSDIR=/usr/src/redhat/SPECS
-RPM_SOURCEDIR=/usr/src/redhat/SOURCES
-XEN_RELEASE=xcp0.2
+RPM_SPECSDIR=$(shell rpm --eval='%_specdir')
+RPM_SOURCEDIR=$(shell rpm --eval='%_sourcedir')
+XEN_RELEASE=xcp$(VERSION)
 
 $(RPM_SPECSDIR)/xapi-libs.spec: xapi.spec.in
 	sed -e s\,@XEN_RELEASE@,$(XEN_RELEASE),g   \

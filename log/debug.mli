@@ -38,6 +38,21 @@ val get_all_debug_keys : unit -> string list
 
 module type BRAND = sig val name : string end
 
+val gettimestring : unit -> string
+(** The current time of day in a format suitable for logging *)
+
+val set_facility : Syslog.facility -> unit
+(** Set the syslog facility that will be used by this program. *)
+
+val disable : string -> unit
+(** [disable brand] Suppress all log output from the given [brand]. This function is idempotent. *)
+
+val enable : string -> unit
+(** [enable brand] Enable all log output from the given [brand]. This function is idempotent. *)
+
+val log_to_stdout : unit -> unit
+(** [log_to_stdout ()] will echo all log output to stdout (not the default) *)
+
 module Debugger : functor (Brand : BRAND) ->
 sig
 
@@ -57,5 +72,7 @@ sig
 	val audit : ?raw:bool -> ('a, unit, string, string) format4 -> 'a
     
 	val log_backtrace : unit -> unit
+
+	val log_and_ignore_exn : (unit -> unit) -> unit
 end
 	

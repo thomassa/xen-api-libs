@@ -14,6 +14,7 @@
 
 open Unix
 open Pervasiveext
+open Threadext
 
 module D = Debug.Debugger(struct let name = "server_io" end)
 open D
@@ -32,14 +33,8 @@ let handler_by_thread (h: handler) (s: Unix.file_descr) (caller: Unix.sockaddr) 
 	(Debug.remove_thread_name)       
     ) ()  
 
-(** Calls a server function in a separate thread *)
-let by_thread name server_fun s caller =
-  Thread.create
-    (fun ()->
-      Debug.name_thread name;
-      Pervasiveext.finally (fun () -> server_fun caller s)
-	(Debug.remove_thread_name)       
-    ) ()
+let handler_inline (h: handler) (s: Unix.file_descr) (caller: Unix.sockaddr) =
+	h.body caller s
 
 (** Function with the main accept loop *)
 

@@ -1,8 +1,14 @@
+type syslog_stdout_t = {
+  enabled : bool;
+  key : string option;
+}
 
-type setup_cmd = {
+and setup_cmd = {
   cmdargs : string list;
   env : string list;
-  id_to_fd_map : (string * int option) list } 
+  id_to_fd_map : (string * int option) list;
+  syslog_stdout : syslog_stdout_t;
+} 
 
 and setup_response = {
   fd_sock_path : string } 

@@ -1,26 +1,13 @@
+include ../config.mk
+
 IPROG=install -m 755
-CC = gcc
 OCAMLLOC := $(shell ocamlc -where)
-CFLAGS = -Wall -fPIC -O2 -I/opt/xensource/lib/ocaml -I$(OCAMLLOC)
-OCAMLC = ocamlc -g
-OCAMLOPT = ocamlopt
-
-LDFLAGS = -cclib -L./
-
-LIBEXEC = "/opt/xensource/libexec/"
-VERSION := $(shell git show-ref --head | grep -E " HEAD$$" | cut -f 1 -d " " || echo 0)
-OCAMLOPTFLAGS = -g -dtypes
-
-OCAMLABI := $(OCAMLLOC)
-OCAMLLIBDIR := $(OCAMLLOC)
-OCAMLDESTDIR ?= $(OCAMLLIBDIR)
-
-FEPP = camlp4o -I ../rpc-light -I $(shell ocamlfind query type-conv) pa_type_conv.cmo pa_rpc.cma
 
 OCAML_TEST_INC = -I $(shell ocamlfind query oUnit)
 OCAML_TEST_LIB = $(shell ocamlfind query oUnit)/oUnit.cmxa
 
 STDEXT_OBJS = \
+	monad \
 	fun \
 	opt \
 	listext \
@@ -52,7 +39,6 @@ STDEXT_OBJS = \
 	backtrace \
 	tar \
 	mapext \
-	os \
 	either \
 	lazyList \
 	extentlistSet \
@@ -63,8 +49,6 @@ LIBS = stdext.cma stdext.cmxa
 
 PROGRAMS = base64pp fe_cli fe_test extentlistset_test
 
-DOCDIR = /myrepos/xen-api-libs/doc
-
 all: $(INTF) $(LIBS)
 
 bins: $(PROGRAMS)
@@ -72,16 +56,16 @@ bins: $(PROGRAMS)
 libs: $(LIBS)
 
 base64pp: base64_main.ml all libstdext_stubs.a
-	ocamlfind $(OCAMLOPT) $(OCAMLOPTFLAGS) stdext.cmxa -linkpkg -o $@ $< -ccopt -L.
+	$(OCAMLOPT) $(OCAMLOPTFLAGS) stdext.cmxa -linkpkg -o $@ $< -ccopt -L.
 
 fe_cli: fe_cli.ml all libstdext_stubs.a
-	ocamlfind $(OCAMLOPT) $(OCAMLOPTFLAGS) unix.cmxa ../uuid/uuid.cmxa ../rpc-light/rpc.cmx ../rpc-light/jsonrpc.cmx stdext.cmxa -linkpkg -o $@ $< -ccopt -L.
+	$(OCAMLOPT) $(OCAMLOPTFLAGS) unix.cmxa ../uuid/uuid.cmxa ../rpc-light/rpc.cmx ../rpc-light/jsonrpc.cmx stdext.cmxa -linkpkg -o $@ $< -ccopt -L.
 
 fe_test: fe_test.ml all libstdext_stubs.a
-	ocamlfind $(OCAMLOPT) $(OCAMLOPTFLAGS) unix.cmxa ../uuid/uuid.cmxa ../rpc-light/rpc.cmx ../rpc-light/jsonrpc.cmx stdext.cmxa -linkpkg -I ../uuid -o $@ $< -ccopt -L.
+	$(OCAMLOPT) $(OCAMLOPTFLAGS) unix.cmxa ../uuid/uuid.cmxa ../rpc-light/rpc.cmx ../rpc-light/jsonrpc.cmx stdext.cmxa -linkpkg -I ../uuid -o $@ $< -ccopt -L.
 
 extentlistset_test: extentlistset_test.ml all libstdext_stubs.a
-	ocamlfind $(OCAMLOPT) $(OCAMLOPTFLAGS) unix.cmxa stdext.cmxa -linkpkg -o $@ $< -ccopt -L.
+	$(OCAMLOPT) $(OCAMLOPTFLAGS) unix.cmxa stdext.cmxa -linkpkg -o $@ $< -ccopt -L.
 
 stdext.cmxa: libstdext_stubs.a $(foreach obj,$(STDEXT_OBJS),$(obj).cmx)
 	$(OCAMLOPT) $(OCAMLOPTFLAGS) -a -o $@ -cclib -lstdext_stubs $(foreach obj,$(STDEXT_OBJS),$(obj).cmx)
@@ -92,7 +76,7 @@ stdext.cma: $(foreach obj,$(STDEXT_OBJS),$(obj).cmo)
 stdext_stubs.a: unixext_stubs.o zerocheck_stub.o 
 	ocamlmklib -o stdext_stubs $+
 
-libstdext_stubs.a: unixext_stubs.o zerocheck_stub.o 
+libstdext_stubs.a: unixext_open_stubs.o unixext_write_stubs.o unixext_stubs.o zerocheck_stub.o
 	ar rcs $@ $+
 	ocamlmklib -o stdext_stubs $+
 
@@ -108,7 +92,7 @@ fecomms.cmo : fecomms.ml
 	$(OCAMLC) -I ../rpc-light -c -o $@ $<
 
 fe.cmo: fe.ml 
-	$(OCAMLC) -pp '$(FEPP)' -I ../jsonrpc -I ../rpc-light -c -o $@ $<
+	$(OCAMLC) $(RPCLIGHTFLAGS) -I ../jsonrpc -I ../rpc-light -c -o $@ $<
 
 forkhelpers.cmo: forkhelpers.ml forkhelpers.cmi
 	$(OCAMLC) -thread -I ../uuid -c -o $@ $<
@@ -129,13 +113,13 @@ filenameext.cmi: filenameext.mli
 	$(OCAMLC) -c -I ../uuid -o $@ $<
 
 fe.cmi: fe.cmo
-	$(OCAMLC) -pp '$(FEPP)' -c -o $@ $<
+	$(OCAMLC) $(RPCLIGHTFLAGS) -c -o $@ $<
 
 %.cmi: %.mli
 	$(OCAMLC) -c -o $@ $<
 
 fe.cmx: fe.ml 
-	$(OCAMLOPT) -pp '$(FEPP)' -I ../rpc-light -c -o $@ $<
+	$(OCAMLOPT) $(RPCLIGHTFLAGS) -I ../rpc-light -c -o $@ $<
 
 threadext.cmx: threadext.ml threadext.cmi
 	$(OCAMLOPT) $(OCAMLOPTFLAGS) -thread -c -o $@ $<
@@ -159,10 +143,9 @@ META: META.in
 	sed 's/@VERSION@/$(VERSION)/g' < $< > $@
 
 .PHONY: install
-install: path = $(DESTDIR)$(shell ocamlfind printconf destdir)
 install: $(LIBS) META
-	mkdir -p $(path)
-	ocamlfind install -destdir $(path) -ldconf ignore stdext META $(INTF) $(LIBS) *.a *.so *.cmx
+	mkdir -p $(OCAMLDESTDIR)
+	ocamlfind install -destdir $(OCAMLDESTDIR) -ldconf ignore stdext META $(INTF) $(LIBS) *.a *.so *.cmx $(SPOT)
 
 .PHONY: bininstall
 bininstall: path = $(DESTDIR)$(LIBEXEC)
@@ -183,7 +166,7 @@ doc: $(INTF)
 	python ../doc/doc.py $(DOCDIR) "stdext" "package" "$(STDEXT_OBJS)" "." "threads,uuid,unix" ""
 
 clean:
-	rm -f *.o *.so *.a *.cmo *.cmi *.cma *.cmx *.cmxa *.annot $(LIBS) $(PROGRAMS)
+	rm -f META *.o *.so *.a *.cmo *.cmi *.cma *.cmx *.cmxa *.annot $(SPOT) $(LIBS) $(PROGRAMS)
 
 #dependency:
 

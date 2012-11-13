@@ -1,25 +1,11 @@
-CC = gcc
-OCAMLLOC := $(shell ocamlc -where)
-CFLAGS = -Wall -fPIC -O2 -I/opt/xensource/lib/ocaml -I$(OCAMLLOC)
-OCAMLC = ocamlc
-OCAMLOPT = ocamlopt 
+include ../config.mk
 
-LDFLAGS = -cclib -L./
-
-VERSION := $(shell git show-ref --head | grep -E " HEAD$$" | cut -f 1 -d " " || echo 0)
-OCAMLCFLAGS = -g -dtypes -thread -I ../stdext
-OCAMLOPTFLAGS = -g -dtypes -thread -I ../stdext
-
-
-OCAMLABI := $(shell ocamlc -version)
-OCAMLLIBDIR := $(shell ocamlc -where)
-OCAMLDESTDIR ?= $(OCAMLLIBDIR)
-
-OBJS = syslog log logs debug
-INTF = log.cmi logs.cmi syslog.cmi debug.cmi
+OBJS = syslog debug
+INTF = syslog.cmi debug.cmi
 LIBS = log.cma log.cmxa
 
-DOCDIR = /myrepos/xen-api-libs/doc
+OCAMLCFLAGS += -thread -I ../stdext
+OCAMLOPTFLAGS += -thread -I ../stdext
 
 all: $(INTF) $(LIBS) $(PROGRAMS)
 
@@ -56,15 +42,12 @@ META: META.in
 	sed 's/@VERSION@/$(VERSION)/g' < $< > $@
 
 #dependency:
-log.cmi: syslog.cmi
-logs.cmi: log.cmi
-debug.cmi: logs.cmi
+debug.cmi:
 
 .PHONY: install
-install: path = $(DESTDIR)$(shell ocamlfind printconf destdir)
 install: $(LIBS) META
-	mkdir -p $(path)
-	ocamlfind install -destdir $(path) -ldconf ignore log META $(INTF) $(LIBS) *.a *.so *.cmx
+	mkdir -p $(OCAMLDESTDIR)
+	ocamlfind install -destdir $(OCAMLDESTDIR) -ldconf ignore log META $(INTF) $(LIBS) *.a *.so *.cmx $(SPOT)
 
 .PHONY: uninstall
 uninstall:
@@ -75,4 +58,4 @@ doc: $(INTF)
 	python ../doc/doc.py $(DOCDIR) "log" "package" "$(OBJS)" "." "stdext" ""
 
 clean:
-	rm -f *.o *.so *.a *.cmo *.cmi *.cma *.cmx *.cmxa *.annot $(LIBS) $(PROGRAMS)
+	rm -f META *.o *.so *.a *.cmo *.cmi *.cma *.cmx *.cmxa *.annot $(SPOT) $(LIBS) $(PROGRAMS)

@@ -1,26 +1,13 @@
+include ../config.mk
+
 IPROG=install -m 755 
-CC = gcc
-CFLAGS = -Wall -fPIC -O2 -I/opt/xensource/lib/ocaml
-OCAMLC = ocamlc -g
-OCAMLOPT = ocamlopt
 
-LDFLAGS = -cclib -L./
-
-LIBEXEC  = "/opt/xensource/libexec"
-VERSION := $(shell git show-ref --head | grep -E " HEAD$$" | cut -f 1 -d " " || echo 0)
-OCAMLOPTFLAGS = -g -dtypes
-
-OCAMLABI := $(shell ocamlc -version)
-OCAMLLIBDIR := $(shell ocamlc -where)
-OCAMLDESTDIR ?= $(OCAMLLIBDIR)
 
 OBJS = closeandexec
 INTF = $(foreach obj, $(OBJS),$(obj).cmi)
 LIBS = closeandexec.cmxa closeandexec.cma
 
 PROGRAMS = closeandexec
-
-DOCDIR = /myrepos/xen-api-libs/doc
 
 all: $(INTF) $(LIBS)
 
@@ -29,7 +16,7 @@ bins: $(PROGRAMS)
 libs: $(LIBS)
 
 closeandexec: closeandexec.cmxa closeandexec_main.cmx all
-	$(OCAMLOPT) $(OCAMLOPTFLAGS) -thread -I ../stdext -I ../uuid uuid.cmxa unix.cmxa threads.cmxa stdext.cmxa closeandexec.cmxa closeandexec_main.cmx -o $@ 
+	$(OCAMLOPT) $(OCAMLOPTFLAGS) -thread -I ../stdext -I ../uuid uuid.cmxa unix.cmxa threads.cmxa stdext.cmxa closeandexec.cmxa closeandexec_main.cmx -o $@
 
 closeandexec.cmxa: $(foreach obj,$(OBJS),$(obj).cmx)
 	$(OCAMLOPT) $(OCAMLOPTFLAGS) -a -o $@ $(foreach obj,$(OBJS),$(obj).cmx)
@@ -53,10 +40,9 @@ META: META.in
 	sed 's/@VERSION@/$(VERSION)/g' < $< > $@
 
 .PHONY: install
-install: path = $(DESTDIR)$(shell ocamlfind printconf destdir)
 install: $(LIBS) META
-	mkdir -p $(path)
-	ocamlfind install -destdir $(path) -ldconf ignore close-and-exec META $(INTF) $(LIBS) *.a *.cmx
+	mkdir -p $(OCAMLDESTDIR)
+	ocamlfind install -destdir $(OCAMLDESTDIR) -ldconf ignore close-and-exec META $(INTF) $(LIBS) *.a *.cmx $(SPOT)
 
 .PHONY: bininstall
 bininstall: path = $(DESTDIR)$(LIBEXEC)
@@ -77,4 +63,4 @@ doc: $(INTF)
 	python ../doc/doc.py $(DOCDIR) "close-and-exec" "library" "$(OBJS)" "." "stdext" ""
 
 clean:
-	rm -f *.o *.so *.a *.cmo *.cmi *.cma *.cmx *.cmxa *.annot $(LIBS) $(PROGRAMS)
+	rm -f META *.o *.so *.a *.cmo *.cmi *.cma *.cmx *.cmxa *.annot $(SPOT) $(LIBS) $(PROGRAMS)

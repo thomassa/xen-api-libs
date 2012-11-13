@@ -32,31 +32,33 @@ let cached_stunnel_path = ref None
 let stunnel_logger = ref ignore
 
 let init_stunnel_path () =
-  try cached_stunnel_path := Some (Unix.getenv "XE_STUNNEL")
-  with Not_found ->
-    if !use_new_stunnel then
-      cached_stunnel_path := Some new_stunnel_path
-    else (
-      let choices = ["/opt/xensource/libexec/stunnel/stunnel";
-		     "/usr/sbin/stunnel4";
-		     "/usr/sbin/stunnel";
-		     "/usr/bin/stunnel4";
-		     "/usr/bin/stunnel";
-		    ] in
-      let rec choose l =
-        match l with
-	    [] -> raise Stunnel_binary_missing
-	  | (p::ps) ->
-	      try Unix.access p [Unix.X_OK]; p
-	      with _ -> choose ps in
-      let path = choose choices in
-      cached_stunnel_path := Some path
-    )
+	try cached_stunnel_path := Some (Unix.getenv "XE_STUNNEL")
+	with Not_found ->
+		if !use_new_stunnel then
+			cached_stunnel_path := Some new_stunnel_path
+		else (
+			let choices = [
+				"/opt/xensource/libexec/stunnel/stunnel";
+				"/usr/sbin/stunnel4";
+				"/usr/sbin/stunnel";
+				"/usr/bin/stunnel4";
+				"/usr/bin/stunnel";
+			] in
+			let rec choose l =
+				match l with
+				| [] -> raise Stunnel_binary_missing
+				| p::ps ->
+					try Unix.access p [Unix.X_OK]; p
+					with _ -> choose ps
+			in
+			let path = choose choices in
+			cached_stunnel_path := Some path
+		)
 
-let stunnel_path() =
-  match !cached_stunnel_path with
-    | Some p -> p 
-    | None -> raise Stunnel_binary_missing
+let stunnel_path () =
+	if Opt.is_none !cached_stunnel_path then
+		init_stunnel_path ();
+	Opt.unbox !cached_stunnel_path
 
 module Unsafe = struct
   (** These functions are not safe in a multithreaded program *)
@@ -162,7 +164,7 @@ exception Stunnel_initialisation_failed
 
 
 (* Internal function which may throw Stunnel_initialisation_failed *)
-let attempt_one_connect ?unique_id ?(use_external_fd_wrapper = true)
+let attempt_one_connect ?unique_id ?(use_fork_exec_helper = true)
     ?(write_to_log = fun _ -> ()) verify_cert extended_diagnosis host port =
   let fds_needed = ref [ Unix.stdin; Unix.stdout; Unix.stderr ] in
   let config_in, config_out, configs, args = 
@@ -179,7 +181,7 @@ let attempt_one_connect ?unique_id ?(use_external_fd_wrapper = true)
         string_of_int (Unixext.int_of_file_descr config_out) in
       fds_needed := config_out :: !fds_needed;
       Some config_in, Some config_out, [(config_out_uuid, config_out)],
-      ["-fd"; if use_external_fd_wrapper then config_out_uuid else config_out_fd]
+      ["-fd"; if use_fork_exec_helper then config_out_uuid else config_out_fd]
     end in
   let data_out,data_in = Unix.socketpair Unix.PF_UNIX Unix.SOCK_STREAM 0 in
   let t = 
@@ -195,7 +197,7 @@ let attempt_one_connect ?unique_id ?(use_external_fd_wrapper = true)
 	         Unsafe.Dup2(data_in, Unix.stdout);
 	         Unsafe.Dup2(logfd, Unix.stderr) ] in
        t.pid <-
-         if use_external_fd_wrapper then begin
+         if use_fork_exec_helper then begin
 	         let cmdline = Printf.sprintf "Using commandline: %s\n" (String.concat " " (path::args)) in
 	         write_to_log cmdline;
 	         FEFork(Forkhelpers.safe_close_and_exec 
@@ -257,7 +259,7 @@ let rec retry f = function
     allows the caller to use diagnose_failure below if stunnel fails.  *)
 let connect
 		?unique_id
-		?use_external_fd_wrapper
+		?use_fork_exec_helper
 		?write_to_log
 		?verify_cert
 		?(extended_diagnosis=false)
@@ -269,7 +271,7 @@ let connect
   let _ = match write_to_log with 
     | Some logger -> stunnel_logger := logger
     | None -> () in
-	retry (fun () -> attempt_one_connect ?unique_id ?use_external_fd_wrapper ?write_to_log _verify_cert extended_diagnosis host port) 5
+	retry (fun () -> attempt_one_connect ?unique_id ?use_fork_exec_helper ?write_to_log _verify_cert extended_diagnosis host port) 5
 
 let sub_after i s =
   let len = String.length s in

@@ -109,14 +109,14 @@ let read_features () =
 		
 (* Does this Intel CPU support "FlexMigration"? 
  * It's not sensibly documented, so check by model *)
-let has_flexmigration family model stepping = 
+let has_flexmigration family model stepping =
+	let fully_maskable_models =
+		[0x17l; 0x1dl; 0x1el; 0x1fl; 0x25l; 0x2al; 0x2cl; 0x2cl; 0x2dl; 0x2el; 0x2fl; 0x3al] in
 	if family <> 0x6l then
 		No
 	else if model = 0x1dl || (model = 0x17l && stepping >= 4l) then
 		Base
-	else if (model = 0x1al && stepping > 2l) ||
-		model = 0x1el || model = 0x25l || model = 0x2cl ||
-		model = 0x2el || model = 0x2fl then
+	else if (model = 0x1al && stepping > 2l) || List.mem model fully_maskable_models then
 		Full
 	else
 		No
@@ -138,7 +138,7 @@ let is_maskable manufacturer family model stepping =
 
 let get_features_from_xen () =
 	let features = 
-	  try Xc.with_intf (fun xc -> Xc.get_boot_cpufeatures xc) 
+	  try Xenctrl.with_intf (fun xc -> Xenctrlext.get_boot_cpufeatures xc) 
 	  with _ -> 0l, 0l, 0l, 0l, 0l, 0l, 0l, 0l 
 	in
 	match features with

@@ -14,6 +14,21 @@
 open Fun
 module List = struct include List
 
+module Monad = Monad.M1.Make (struct
+
+	type 'a m = 'a list
+
+	let bind list f =
+		let rec inner result = function
+			| x :: xs -> inner (List.rev_append (f x) result) xs
+			| [] -> List.rev result
+		in
+		inner [] list
+
+	let return x = [x]
+
+end)
+
 (** Turn a list into a set *)
 let rec setify = function
 	| [] -> []
@@ -191,13 +206,11 @@ let safe_hd = function
 	| a::_ -> Some a
 	| [] -> None
 
-let rec replace_assoc key new_value = function
-	| [] -> []
-	| (k, _) as p :: tl ->
-		if k = key then
-			(key, new_value) :: tl
-		else
-			p :: replace_assoc key new_value tl
+let replace_assoc key new_value existing =
+	(key, new_value) :: (List.filter (fun (k, _) -> k <> key) existing)
+
+let update_assoc update existing =
+	update @ (List.filter (fun (k, _) -> not (List.mem_assoc k update)) existing)
 
 let make_assoc op l = map (fun key -> key, op key) l
 

@@ -21,14 +21,24 @@ val pidfile_write : string -> unit
 val pidfile_read : string -> int option
 val daemonize : unit -> unit
 val with_file : string -> Unix.open_flag list -> Unix.file_perm -> (Unix.file_descr -> 'a) -> 'a
+val with_input_channel : string -> (in_channel -> 'a) -> 'a
 val with_directory : string -> (Unix.dir_handle -> 'a) -> 'a
 
 (** Exception to be raised in function to break out of [file_lines_fold]. *)
 exception Break
 
+(** Folds function [f] over every line in the input channel *)
+val lines_fold : ('a -> string -> 'a) -> 'a -> in_channel -> 'a
+
+(** Applies function [f] to every line in the input channel *)
+val lines_iter : (string -> unit) -> in_channel -> unit
+
 (** Folds function [f] over every line in the file at [file_path] using the
 starting value [start]. *)
 val file_lines_fold : ('a -> string -> 'a) -> 'a -> string -> 'a
+
+(** [read_lines path] returns a list of lines in the file at [path]. *)
+val read_lines : path:string -> string list
 
 (** Applies function [f] to every line in the file at [file_path]. *)
 val file_lines_iter : (string -> unit) -> string -> unit
@@ -82,20 +92,22 @@ val delete_empty_file : string -> bool
 exception Host_not_found of string
 val open_connection_fd : string -> int -> Unix.file_descr
 val open_connection_unix_fd : string -> Unix.file_descr
-type endpoint = {
-  fd : Unix.file_descr;
-  mutable buffer : string;
-  mutable buffer_len : int;
-}
+
+
 exception Process_still_alive
 val kill_and_wait : ?signal:int -> ?timeout:float -> int -> unit
-val make_endpoint : Unix.file_descr -> endpoint
+
+(** [string_of_signal x] translates an ocaml signal number into
+	a string suitable for logging. *)
+val string_of_signal : int -> string
+
 val proxy : Unix.file_descr -> Unix.file_descr -> unit
 val really_read : Unix.file_descr -> string -> int -> int -> unit
 val really_read_string : Unix.file_descr -> int -> string
 val really_read_bigbuffer : Unix.file_descr -> Bigbuffer.t -> int64 -> unit
 val really_write : Unix.file_descr -> string -> int -> int -> unit
 val really_write_string : Unix.file_descr -> string -> unit
+val try_read_string : ?limit: int -> Unix.file_descr -> string
 exception Timeout
 val time_limited_write : Unix.file_descr -> int -> string -> float -> unit
 val time_limited_read : Unix.file_descr -> int -> float -> string
@@ -135,10 +147,50 @@ end
 
 val wait_for_path : string -> (float -> unit) -> int -> unit
 
-(** Download a file via an HTTP GET *)
-val http_get: open_tcp:(server:string -> (in_channel * out_channel)) -> uri:string -> filename:string -> server:string -> unit
-(** Upload a file via an HTTP PUT *)
-val http_put: open_tcp:(server:string -> (in_channel * out_channel)) -> uri:string -> filename:string -> server:string -> unit
-
 external send_fd : Unix.file_descr -> string -> int -> int -> Unix.msg_flag list -> Unix.file_descr -> int = "stub_unix_send_fd_bytecode" "stub_unix_send_fd"
 external recv_fd : Unix.file_descr -> string -> int -> int -> Unix.msg_flag list -> int * Unix.sockaddr * Unix.file_descr = "stub_unix_recv_fd"
+
+type statvfs_t = {
+	f_bsize : int64;
+	f_frsize : int64;
+	f_blocks : int64;
+	f_bfree : int64;
+	f_bavail : int64;
+	f_files : int64;
+	f_ffree : int64;
+	f_favail : int64;
+	f_fsid : int64;
+	f_flag : int64;
+	f_namemax : int64;
+}
+
+val statvfs : string -> statvfs_t
+
+module Direct : sig
+	(** Perform I/O in O_DIRECT mode using 4KiB page-aligned buffers *)
+
+	type t
+	(** represents a file open in O_DIRECT mode *)
+
+	val openfile : string -> Unix.open_flag list -> Unix.file_perm -> t
+	(** [openfile name flags perm] behaves the same as [Unix.openfile] but includes the O_DIRECT flag *)
+
+	val close : t -> unit
+	(** [close t] closes [t], a file open in O_DIRECT mode *)
+
+	val with_openfile : string -> Unix.open_flag list -> Unix.file_perm -> (t -> 'a) -> 'a
+	(** [with_openfile name flags perm f] opens [name], applies the result to [f] and closes *)
+
+	val write : t -> string -> int -> int -> int
+	(** [write t buf ofs len] writes [len] bytes at offset [ofs] from buffer [buf] to
+		[t] using page-aligned buffers. *)
+
+	val copy_from_fd : ?limit:int64 -> Unix.file_descr -> t -> int64
+	(** [copy_from_fd ?limit fd t] copies from [fd] to [t] up to [limit] *)
+
+	val fsync : t -> unit
+	(** [fsync t] commits all outstanding writes, throwing an error if necessary. *)
+
+	val lseek : t -> int64 -> Unix.seek_command -> int64
+	(** [lseek t offset command]: see Unix.LargeFile.lseek *)
+end

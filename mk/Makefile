@@ -1,31 +1,36 @@
 ifdef B_BASE
 include $(B_BASE)/common.mk
 include $(B_BASE)/rpmbuild.mk
-REPO = $(call gitloc,xen-api-libs)
+REPO = $(call git_loc,xen-api-libs)
 else
 REPO ?= $(CURDIR)
 %/.dirstamp:
 	@mkdir -p $*
 	@touch $@
 endif
+RPM_SPECSDIR?=$(shell rpm --eval='%_specdir')
+RPM_SRPMSDIR?=$(shell rpm --eval='%_srcrpmdir')
+RPM_SOURCESDIR?=$(shell rpm --eval='%_sourcedir')
+RPM_RPMSDIR?=$(shell rpm --eval='%_rpmdir')
+RPMBUILD?=rpmbuild
 
+XAPI_LIBS_RELEASE=$(shell git rev-list HEAD | wc -l )
 RPM_BINDIR=$(RPM_RPMSDIR)/$(DOMAIN0_ARCH_OPTIMIZED)
+SPECNAME=xapi-libs.spec
 
 .PHONY: build
-build: srpm $(MY_SOURCES)/MANIFEST
-	$(RPMBUILD) --target $(DOMAIN0_ARCH_OPTIMIZED) -bb $(RPM_SPECSDIR)/xapi-libs.spec
+build: $(MY_SOURCES)/MANIFEST rpm
+
+.PHONY: rpm
+rpm:
+	mkdir -p $(RPM_RPMSDIR)
+	$(MAKE) -C $(REPO) -f Makefile.xcp srpm
+	mkdir -p $(RPM_RPMSDIR)/$(DOMAIN_ZERO_OPTIMIZED)
+	$(RPMBUILD) --target $(DOMAIN0_ARCH_OPTIMIZED) -bb  $(RPM_SPECSDIR)/$(SPECNAME)
 	mkdir -p $(MY_MAIN_PACKAGES)
 	cp $(RPM_RPMSDIR)/$(DOMAIN0_ARCH_OPTIMIZED)/xapi-libs-fe-*.rpm $(MY_MAIN_PACKAGES)
 
-.PHONY: srpm
-srpm:
-	mkdir -p $(RPM_SRPMSDIR) $(RPM_SPECSDIR) $(RPM_SOURCESDIR) $(RPM_RPMSDIR)
-	while ! [ -d .git ]; do cd ..; done; \
-	git archive --prefix=xapi-libs-0/ --format=tar HEAD | bzip2 -z > $(RPM_SOURCESDIR)/xapi-libs-0.tar.bz2  # xen-api-libs/mk/Makefile
-	install ../xapi-libs.spec $(RPM_SPECSDIR)
-	$(RPMBUILD) --target $(DOMAIN0_ARCH_OPTIMIZED) -bs $(RPM_SPECSDIR)/xapi-libs.spec
-
-$(MY_SOURCES)/MANIFEST: $(MY_SOURCES_DIRSTAMP)
+$(MY_SOURCES)/MANIFEST: rpm $(MY_SOURCES_DIRSTAMP)
 	rm -f $@
 	/bin/sh ./srpms-to-manifest api-libs $(MY_OUTPUT_DIR)/SRPMS > $@
 

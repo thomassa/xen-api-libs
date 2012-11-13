@@ -1,23 +1,10 @@
-CC = gcc
-CFLAGS = -Wall -fPIC -O2 -I/usr/lib/ocaml
-OCAMLC = ocamlc -g
-OCAMLOPT = ocamlopt
+include ../config.mk
 
-LDFLAGS = -cclib -L./
-
-VERSION := $(shell git show-ref --head | grep -E " HEAD$$" | cut -f 1 -d " " || echo 0)
-OCAMLOPTFLAGS = -g -dtypes
 OCAMLFLAGS = -I ../stdext
-
-OCAMLABI := $(shell ocamlc -version)
-OCAMLLIBDIR := $(shell ocamlc -where)
-OCAMLDESTDIR ?= $(OCAMLLIBDIR)
 
 OBJS = netdev
 INTF = $(foreach obj, $(OBJS),$(obj).cmi)
 LIBS = netdev.cma netdev.cmxa
-
-DOCDIR = /myrepos/xen-api-libs/doc
 
 all: $(INTF) $(LIBS) $(PROGRAMS)
 
@@ -54,10 +41,9 @@ META: META.in
 	sed 's/@VERSION@/$(VERSION)/g' < $< > $@
 
 .PHONY: install
-install: path = $(DESTDIR)$(shell ocamlfind printconf destdir)
 install: $(LIBS) META
-	mkdir -p $(path)
-	ocamlfind install -destdir $(path) -ldconf ignore netdev META $(INTF) $(LIBS) *.a *.so *.cmx
+	mkdir -p $(OCAMLDESTDIR)
+	ocamlfind install -destdir $(OCAMLDESTDIR) -ldconf ignore netdev META $(INTF) $(LIBS) *.a *.so *.cmx $(SPOT)
 
 .PHONY: uninstall
 uninstall:
@@ -68,5 +54,5 @@ doc: $(INTF)
 	python ../doc/doc.py $(DOCDIR) "netdev" "package" "$(OBJS)" "." "" ""
 
 clean:
-	rm -f *.o *.so *.a *.cmo *.cmi *.cma *.cmx *.cmxa *.annot $(LIBS) $(PROGRAMS)
+	rm -f META *.o *.so *.a *.cmo *.cmi *.cma *.cmx *.cmxa *.annot $(SPOT) $(LIBS) $(PROGRAMS)
 

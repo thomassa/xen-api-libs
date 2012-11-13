@@ -87,22 +87,33 @@ let daemonize () =
 
 exception Break
 
-let file_lines_fold f start file_path =
-	let input = open_in file_path in
-	let rec fold accumulator =
+let lines_fold f start input =
+	let accumulator = ref start in
+	let running = ref true in
+	while !running do
 		let line =
 			try Some (input_line input)
-			with End_of_file -> None in
+			with End_of_file -> None
+		in
 		match line with
-			| Some line -> (try fold (f accumulator line) with Break -> accumulator)
-			| None -> accumulator in
+		| Some line ->
+			begin
+				try accumulator := (f !accumulator line)
+				with Break -> running := false
+			end
+		| None ->
+				running := false
+	done;
+	!accumulator
+
+let lines_iter f = lines_fold (fun () line -> ignore(f line)) ()
+
+(** open a file, and make sure the close is always done *)
+let with_input_channel file f =
+	let input = open_in file in
 	finally
-		(fun () -> fold start)
+		(fun () -> f input)
 		(fun () -> close_in input)
-
-let file_lines_iter f file_path = file_lines_fold (fun () line -> ignore(f line)) () file_path
-
-let readfile_line = file_lines_iter
 
 (** open a file, and make sure the close is always done *)
 let with_file file mode perms f =
@@ -113,6 +124,16 @@ let with_file file mode perms f =
 		in
 	Unix.close fd;
 	r
+
+let file_lines_fold f start file_path = with_input_channel file_path (lines_fold f start)
+
+let read_lines ~(path : string) : string list =
+	List.rev (file_lines_fold (fun acc line -> line::acc) [] path)
+
+let file_lines_iter f = file_lines_fold (fun () line -> ignore(f line)) ()
+
+let readfile_line = file_lines_iter
+
 
 (** [fd_blocks_fold block_size f start fd] folds [f] over blocks (strings)
     from the fd [fd] with initial value [start] *)
@@ -186,9 +207,7 @@ let execv_get_output cmd args =
 		Unix.close pipe_entrance;
 		pid, pipe_exit
 
-(** Copy all data from an in_channel to an out_channel,
- * returning the total number of bytes *)
-let copy_file ?limit ifd ofd =
+let copy_file_internal ?limit reader writer =
 	let buffer = String.make 65536 '\000' in
 	let buffer_len = Int64.of_int (String.length buffer) in
 	let finished = ref false in
@@ -196,15 +215,17 @@ let copy_file ?limit ifd ofd =
 	let limit = ref limit in
 	while not(!finished) do
 		let requested = min (Opt.default buffer_len !limit) buffer_len in
-		let num = Unix.read ifd buffer 0 (Int64.to_int requested) in
+		let num = reader buffer 0 (Int64.to_int requested) in
 		let num64 = Int64.of_int num in
 
 		limit := Opt.map (fun x -> Int64.sub x num64) !limit;
-		ignore_int (Unix.write ofd buffer 0 num);
+		ignore_int (writer buffer 0 num);
 		total_bytes := Int64.add !total_bytes num64;
 		finished := num = 0 || !limit = Some 0L;
 	done;
 	!total_bytes
+
+let copy_file ?limit ifd ofd = copy_file_internal ?limit (Unix.read ifd) (Unix.write ofd)
 
 let file_exists file_path =
 	try Unix.access file_path [Unix.F_OK]; true
@@ -255,13 +276,53 @@ let open_connection_unix_fd filename =
 	  s
 	with e -> Unix.close s; raise e
 
-type endpoint = { fd: Unix.file_descr; mutable buffer: string; mutable buffer_len: int }
+module CBuf = struct
+	(** A circular buffer constructed from a string *)
+	type t = {
+		mutable buffer: string; 
+		mutable len: int;       (** bytes of valid data in [buffer] *)
+		mutable start: int;     (** index of first valid byte in [buffer] *)
+		mutable r_closed: bool; (** true if no more data can be read due to EOF *)
+		mutable w_closed: bool; (** true if no more data can be written due to EOF *)
+	}
 
-let make_endpoint fd = {
-	fd = fd;
-	buffer = String.make 4096 '\000';
-	buffer_len = 0
-}
+	let empty length = {
+		buffer = String.create length;
+		len = 0;
+		start = 0;
+		r_closed = false;
+		w_closed = false;
+	}
+
+	let drop (x: t) n =
+		if n > x.len then failwith (Printf.sprintf "drop %d > %d" n x.len);
+		x.start <- (x.start + n) mod (String.length x.buffer);
+		x.len <- x.len - n
+
+	let should_read (x: t) =
+		not x.r_closed && (x.len < (String.length x.buffer - 1))
+	let should_write (x: t) =
+		not x.w_closed && (x.len > 0)
+
+	let end_of_reads (x: t) = x.r_closed && x.len = 0
+	let end_of_writes (x: t) = x.w_closed
+
+	let write (x: t) fd =
+		(* Offset of the character after the substring *)
+		let next = min (String.length x.buffer) (x.start + x.len) in
+		let len = next - x.start in
+		let written = try Unix.single_write fd x.buffer x.start len with e -> x.w_closed <- true; len in
+		drop x written
+
+	let read (x: t) fd =
+		(* Offset of the next empty character *)
+		let next = (x.start + x.len) mod (String.length x.buffer) in
+		let len = min (String.length x.buffer - next) (String.length x.buffer - x.len) in
+		let read = Unix.read fd x.buffer next len in
+		if read = 0 then x.r_closed <- true;
+		x.len <- x.len + read
+	
+end
 
 exception Process_still_alive
 
@@ -301,33 +362,59 @@ let kill_and_wait ?(signal = Sys.sigterm) ?(timeout=10.) pid =
 			raise Process_still_alive;
 	)
 
+let string_of_signal x =
+	let table = [
+		Sys.sigabrt, "SIGABRT";
+		Sys.sigalrm, "SIGALRM";
+		Sys.sigfpe, "SIGFPE";
+		Sys.sighup, "SIGHUP";
+		Sys.sigill, "SIGILL";
+		Sys.sigint, "SIGINT";
+		Sys.sigkill, "SIGKILL";
+		Sys.sigpipe, "SIGPIPE";
+		Sys.sigquit, "SIGQUIT";
+		Sys.sigsegv, "SIGSEGV";
+		Sys.sigterm, "SIGTERM";
+		Sys.sigusr1, "SIGUSR1";
+		Sys.sigusr2, "SIGUSR2";
+		Sys.sigchld, "SIGCHLD";
+		Sys.sigcont, "SIGCONT";
+		Sys.sigstop, "SIGSTOP";
+		Sys.sigttin, "SIGTTIN";
+		Sys.sigttou, "SIGTTOU";
+		Sys.sigvtalrm, "SIGVTALRM";
+		Sys.sigprof, "SIGPROF";
+	] in
+	if List.mem_assoc x table
+	then List.assoc x table
+	else (Printf.sprintf "(ocaml signal %d with an unknown name)" x)
+
 let proxy (a: Unix.file_descr) (b: Unix.file_descr) =
-	let a' = make_endpoint a and b' = make_endpoint b in
+	let size = 64 * 1024 in
+	(* [a'] is read from [a] and will be written to [b] *)
+	(* [b'] is read from [b] and will be written to [a] *)
+	let a' = CBuf.empty size and b' = CBuf.empty size in
 	Unix.set_nonblock a;
 	Unix.set_nonblock b;
 
-	let can_read x =
-		x.buffer_len < (String.length x.buffer - 1) in
-	let can_write x =
-		x.buffer_len > 0 in
-	let write_from x fd =
-		let written = Unix.single_write fd x.buffer 0 x.buffer_len in
-		String.blit x.buffer written x.buffer 0 (x.buffer_len - written);
-		x.buffer_len <- x.buffer_len - written in
-	let read_into x =
-		let read = Unix.read x.fd x.buffer x.buffer_len (String.length x.buffer - x.buffer_len) in
-		if read = 0 then raise End_of_file;
-		x.buffer_len <- x.buffer_len + read in
-
 	try
 	while true do
-		let r = (if can_read a' then [ a ] else []) @ (if can_read b' then [ b ] else []) in
-		let w = (if can_write a' then [ b ] else []) @ (if can_write b' then [ a ] else []) in
+		let r = (if CBuf.should_read a' then [ a ] else []) @ (if CBuf.should_read b' then [ b ] else []) in
+		let w = (if CBuf.should_write a' then [ b ] else []) @ (if CBuf.should_write b' then [ a ] else []) in
+
+		(* If we can't make any progress (because fds have been closed), then stop *)
+		if r = [] && w = [] then raise End_of_file;
 
 		let r, w, _ = Unix.select r w [] (-1.0) in
 		(* Do the writing before the reading *)
-		List.iter (fun fd -> if a = fd then write_from b' a else write_from a' b) w;
-		List.iter (fun fd -> if a = fd then read_into a' else read_into b') r
+		List.iter (fun fd -> if a = fd then CBuf.write b' a else CBuf.write a' b) w;
+		List.iter (fun fd -> if a = fd then CBuf.read a' a else CBuf.read b' b) r;
+		(* If there's nothing else to read or write then signal the other end *)
+		List.iter
+			(fun (buf, fd) ->
+				if CBuf.end_of_reads buf then Unix.shutdown fd Unix.SHUTDOWN_SEND;
+				if CBuf.end_of_writes buf then Unix.shutdown fd Unix.SHUTDOWN_RECEIVE
+			) [ a', b; b', a ]
 	done
 	with _ ->
 		(try Unix.clear_nonblock a with _ -> ());
@@ -345,6 +432,21 @@ let really_read_string fd length =
   let buf = String.make length '\000' in
   really_read fd buf 0 length;
   buf
+
+let try_read_string ?limit fd =
+	let buf = Buffer.create 0 in
+	let chunk = match limit with None -> 4096 | Some x -> x in
+	let cache = String.make chunk '\000' in
+	let finished = ref false in
+	while not !finished do
+		let to_read = match limit with
+			| Some x -> min (x - (Buffer.length buf)) chunk
+			| None -> chunk in
+		let read_bytes = Unix.read fd cache 0 to_read in
+		Buffer.add_substring buf cache 0 read_bytes;
+		if read_bytes = 0 then finished := true
+	done;
+	Buffer.contents buf
 
 let really_read_bigbuffer fd bigbuf n =
 	let chunk = 4096 in
@@ -555,118 +657,47 @@ let wait_for_path path delay timeout =
 
 let _ = Callback.register_exception "unixext.unix_error" (Unix_error (0))
 
-(* HTTP helpers *)
-module Http =
-struct
-	exception Parse_error
-	exception Unknown_file of string
-	exception File_already_exists of string
-
-	let http_response_code x =
-		match Stringext.String.split ' ' x with
-		| _:: code:: _ -> int_of_string code
-		| _ -> raise Parse_error
-
-	let rec read_rest_of_headers ic =
-		let hdrs = ["content-length"; "cookie"; "connection"; "transfer-encoding"; "authorization"; "location"] in
-
-		let strip_cr r =
-			if String.length r = 0 || r.[String.length r - 1] <> '\r' then
-				raise Parse_error
-			else
-				String.sub r 0 ((String.length r)-1) in
-
-		try
-			let line = input_line ic in
-			let r = strip_cr line in
-			if r = "" then
-				[]
-			else begin
-				let hdr = List.find (fun s -> Stringext.String.startswith (s^": ") (String.lowercase r)) hdrs in
-				let value = Stringext.String.sub_to_end r (String.length hdr + 2) in
-				(hdr,value) :: read_rest_of_headers ic
-			end
-		with
-		| Not_found -> read_rest_of_headers ic    
-		| _ -> []
-
-	let rec get ~open_tcp ~uri ~filename ~server =
-
-		(* Check if the filename is valid *)
-		if filename <> "" && Sys.file_exists filename then
-			raise (File_already_exists filename);
-		let fd = 
-			if filename = "" then
-				Unix.dup Unix.stdout
-			else
-				Unix.openfile filename [ Unix.O_WRONLY; Unix.O_CREAT; Unix.O_EXCL ] 0o600 in
-
-		let ic, oc = open_tcp ~server in
-		(* Send a GET request to the HTTP server *)
-		Printf.fprintf oc "GET %s HTTP/1.0\r\n\r\n" uri;
-		flush oc;
-		(* Get the result header immediately *)
-		let result_line = input_line ic in
-
-		match http_response_code result_line with
-		| 200 ->
-			(* Copy from channel to the file descriptor *)
-			let finished = ref false in
-			while not !finished do
-				finished := input_line ic = "\r";
-			done;
-
-			let buffer = String.make 65536 '\000' in
-
-			let finished = ref false in
-			while not(!finished) do
-				let num = input ic buffer 0 (String.length buffer) in
-				really_write fd buffer 0 num;
-				finished := num = 0;
-			done;
-
-			Unix.close fd;
-			(try close_in ic with _ -> ()); (* Nb. Unix.close_connection only requires the in_channel *)
-
-		| 302 ->
-			let headers = read_rest_of_headers ic in
-			let new_loc = List.assoc "location" headers in
-			(try close_in ic with _ -> ()); (* Nb. Unix.close_connection only requires the in_channel *)
-			get ~open_tcp ~uri ~filename ~server:new_loc
-
-		| _ -> failwith "Unhandled response code"
-
-	let rec put ~open_tcp ~uri ~filename ~server =
-
-		(* Check if the filename is valid *)
-		if not (Sys.file_exists filename) then
-			raise (Unknown_file filename);
-		let fd = Unix.openfile filename [ Unix.O_RDONLY ] 0 in
-
-		let ic, oc = open_tcp ~server in
-		(* Send a PUT request to the HTTP server *)
-		Printf.fprintf oc "PUT %s HTTP/1.0\r\n\r\n" uri;
-		flush oc;
-		(* Get the result header immediately *)
-		let resultline = input_line ic in
-
-		match http_response_code resultline with
-		| 200 -> 
-			let oc_fd = Unix.descr_of_out_channel oc in
-			let bytes = copy_file fd oc_fd in
-			Unix.close fd;
-			Unix.shutdown oc_fd Unix.SHUTDOWN_SEND;
-
-		| 302 ->
-			let headers = read_rest_of_headers ic in
-			let newloc = List.assoc "location" headers in
-			put ~open_tcp ~uri ~filename ~server:newloc
-
-		| _ -> failwith "Unhandled response code"
-end
-
-let http_get = Http.get
-let http_put = Http.put
-
 external send_fd : Unix.file_descr -> string -> int -> int -> Unix.msg_flag list -> Unix.file_descr -> int = "stub_unix_send_fd_bytecode" "stub_unix_send_fd"
 external recv_fd : Unix.file_descr -> string -> int -> int -> Unix.msg_flag list -> int * Unix.sockaddr * Unix.file_descr = "stub_unix_recv_fd"
+
+
+type statvfs_t = {
+	f_bsize : int64;
+	f_frsize : int64;
+	f_blocks : int64;
+	f_bfree : int64;
+	f_bavail : int64;
+	f_files : int64;
+	f_ffree : int64;
+	f_favail : int64;
+	f_fsid : int64;
+	f_flag : int64;
+	f_namemax : int64;
+}
+
+external statvfs : string -> statvfs_t = "stub_statvfs"
+
+module Direct = struct
+	type t = Unix.file_descr
+
+	external openfile : string -> Unix.open_flag list -> Unix.file_perm -> t = "stub_stdext_unix_open_direct"
+
+	let close = Unix.close
+
+	let with_openfile path flags perms f =
+		let t = openfile path flags perms in
+		finally (fun () -> f t) (fun () -> close t)
+
+	external unsafe_write : t -> string -> int -> int -> int = "stub_stdext_unix_write"
+
+	let write fd buf ofs len =
+		if ofs < 0 || len < 0 || ofs > String.length buf - len
+		then invalid_arg "Unix.write"
+		else unsafe_write fd buf ofs len
+
+	let copy_from_fd ?limit socket fd = copy_file_internal ?limit (Unix.read socket) (write fd)
+
+	let fsync x = fsync x
+
+	let lseek fd x cmd = Unix.LargeFile.lseek fd x cmd
+end
